@@ -1,71 +1,83 @@
 import subprocess
 import csv
-import os
-import datetime
+from datetime import datetime
 
-# Specify the path where the CSV file will be saved
-csv_path = "/mnt/user/data/scripts/data_database.csv"
-
-def get_active_disks_temperature():
+# Run smartctl --scan to list all available drives
+def get_all_disks():
     try:
-        # Run smartctl to list all active disks
-        cmd = ['smartctl', '--scan']
-        output = subprocess.check_output(cmd, universal_newlines=True, stderr=subprocess.STDOUT)
-
-        # Split the output into lines
-        lines = output.strip().split('\n')
-
-        disk_info = []
-
-        # Iterate through each line to extract disk information
-        for line in lines:
-            parts = line.split()
-            if len(parts) >= 7 and (parts[0].startswith('/dev/sd') or parts[0].startswith('/dev/nvme')):  # Modify this pattern if needed
-                disk = parts[0]
-                temp_cmd = ['smartctl', '-A', disk]
-                temp_output = subprocess.check_output(temp_cmd, universal_newlines=True, stderr=subprocess.STDOUT)
-                temp_lines = temp_output.strip().split('\n')
-
-                # Find the temperature line and extract the value
-                temperature_line = next((line for line in temp_lines if 'Temperature_Celsius' in line), None)
-                if temperature_line:
-                    temperature_value = temperature_line.split()[9]
-                    # Add a date and time stamp
-                    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    disk_info.append({'Timestamp': timestamp, 'Disk': disk, 'Temperature': temperature_value})
-
-        return disk_info
-
+        result = subprocess.run(["smartctl", "--scan"], capture_output=True, text=True, check=True)
+        drive_lines = result.stdout.strip().split("\n")
+        return [line.split()[0] for line in drive_lines]
     except subprocess.CalledProcessError as e:
-        print(f"Error: {e.output}")
-        return None
+        print(f"Error running smartctl --scan: {e}")
+        return []
 
-def save_to_database(data, database_filename, headers):
-    # Check if the database file already exists, if not, create it and write the headers
-    if not os.path.isfile(database_filename):
-        with open(database_filename, mode='w', newline='') as file:
-            writer = csv.DictWriter(file, fieldnames=headers)
-            writer.writeheader()
+# CSV file name
+csv_file = "/mnt/user/data/scripts/data_database.csv"
 
-    # Remove the /dev/ prefix from the disk identifier before writing to the CSV
-    data['Disk'] = data['Disk'][5:]
+# Get the current timestamp
+timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Append the new data to the database file
-    with open(database_filename, mode='a', newline='') as file:
-        writer = csv.DictWriter(file, fieldnames=headers)
-        writer.writerow(data)
+# Get a list of all available drives
+all_drives = get_all_disks()
 
-if __name__ == "__main__":
-    active_disks_temperature = get_active_disks_temperature()
+# Open the CSV file for writing
+with open(csv_file, mode='a', newline='') as file:
+    writer = csv.writer(file)
+    
+    # Write the header if the file is empty
+    if file.tell() == 0:
+        writer.writerow(["Timestamp", "Disk", "Temperature (°C)"])
+    
+    # Loop through each drive
+    for drive in all_drives:
+        try:
+            # Check if the drive starts with "sd"
+            if drive.startswith("/dev/sd"):
+                # Run smartctl to get temperature data
+                result = subprocess.run(["smartctl", "-A", drive], capture_output=True, text=True, check=True)
+                
+                # Find the temperature from the smartctl output
+                temperature = None
+                for line in result.stdout.splitlines():
+                    if "Temperature_Celsius" in line:
+                        temperature = line.split()[9]
+                        break
+                
+                # If temperature is None or couldn't be determined, set it to "N/A"
+                if temperature is None:
+                    temperature = "N/A"
+            else:
+                # For NVMe drives, use the previous logic to find temperature
+                try:
+                    # Run smartctl to get temperature data
+                    result = subprocess.run(["smartctl", "-a", drive], capture_output=True, text=True, check=True)
+                    
+                    # Find the temperature from the smartctl output
+                    temperature = None
+                    for line in result.stdout.splitlines():
+                        if "Temperature:" in line:
+                            parts = line.split()
+                            if len(parts) >= 2:
+                                temperature = parts[1]
+                                break
+                    
+                    # If temperature is None or couldn't be determined, set it to "N/A"
+                    if temperature is None:
+                        temperature = "N/A"
+                except subprocess.CalledProcessError as e:
+                    print(f"Error running smartctl for {drive}: {e}")
+                    temperature = "N/A"
+        
+            # Write the data to the CSV file
+            writer.writerow([timestamp, drive, temperature])
+            
+            print(f"Timestamp: {timestamp}, Disk: {drive}, Temperature: {temperature}°C")
+        
+        except subprocess.CalledProcessError as e:
+            print(f"Error running smartctl for {drive}: {e}")
+        
+        except Exception as e:
+            print(f"Error: {e}")
 
-    if active_disks_temperature:
-        for disk_info in active_disks_temperature:
-            print(f"Timestamp: {disk_info['Timestamp']}")
-            print(f"Disk: {disk_info['Disk']}")
-            print(f"Temperature: {disk_info['Temperature']}°C")
-            print()
-            # Save the data to the specified CSV file
-            headers = ['Timestamp', 'Disk', 'Temperature']
-            save_to_database(disk_info, csv_path, headers)
-    else:
-        print("Failed to retrieve disk temperature information.")
+print("Data written to", csv_file)
