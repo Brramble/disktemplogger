@@ -77,8 +77,8 @@ foreach ($diskData as $disk => $data) {
             options: {
                 scales: {
                     y: {
-                        suggestedMin: 25, // Set the minimum value of the y-axis
-                        suggestedMax: 45, // Set the maximum value of the y-axis
+                        suggestedMin: 20, // Set the minimum value of the y-axis
+                        suggestedMax: 50, // Set the maximum value of the y-axis
                     }
                 }
             }
